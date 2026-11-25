@@ -26,6 +26,11 @@
 перезапуск бота через `PicklePersistence` (`data/bot_state.pickle`). Папка `data/` — в
 `.gitignore`, в ней телефоны/имена покупателей.
 
+Голосовые, фото, стикеры и прочие не-текстовые сообщения бот пока не разбирает — отвечает,
+что понимает только текст, и предлагает `/form`. При старте бот сам дёргает модель тестовым
+запросом и пишет в лог, жива ли она — чтобы не узнавать об упавшем GROQ_API_KEY/модели только
+по жалобе первого написавшего пользователя.
+
 ## Установка
 
 ```bash
@@ -58,6 +63,13 @@ Telegram-бот (нужен `TELEGRAM_BOT_TOKEN` от @BotFather):
 cd src && python bot.py
 ```
 
+Тесты (чистые функции `parser.py` — маска телефона, сборка ответа; без сети и без API-ключа):
+
+```bash
+pip install -r requirements-dev.txt
+pytest tests/
+```
+
 ## Структура
 
 ```
@@ -68,4 +80,6 @@ src/
   wizard.py   — пошаговая форма по кнопкам (/form), альтернатива свободному тексту
   bot.py      — Telegram-бот (python-telegram-bot)
   cli.py      — локальный прогон без Telegram
+tests/
+  test_parser.py — тесты normalize_phone() и format_response()
 ```

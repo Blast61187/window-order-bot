@@ -181,6 +181,8 @@ def format_response(data: dict) -> str:
 
     question = data.get("clarifying_question")
     if question:
+        # модель иногда всё равно добавляет своё "уточните, пожалуйста" — снимаем дубль
+        question = re.sub(r"^уточните,?\s*пожалуйста,?\s*", "", question.strip(), flags=re.IGNORECASE)
         lines.append("")
         lines.append(f"Уточните, пожалуйста: {question}")
 

@@ -116,7 +116,27 @@ async def handle_finish_button(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
+async def handle_unsupported(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        "Пока умею читать только текст — голосовые, фото и файлы не разбираю.\n\n"
+        "Опишите заявку словами или наберите /form, чтобы заполнить по шагам."
+    )
+
+
+def _check_llm_at_startup() -> None:
+    try:
+        extract("Нужно окно 1000х1200, 1 шт.")
+        log.info("Проверка модели при старте: OK")
+    except Exception:
+        log.exception(
+            "Проверка модели при старте НЕ прошла — проверьте GROQ_API_KEY/GROQ_MODEL. "
+            "Бот всё равно запустится, но разбор заявок будет падать."
+        )
+
+
 def main() -> None:
+    _check_llm_at_startup()
+
     token = os.environ["TELEGRAM_BOT_TOKEN"]
     state_file = Path(__file__).resolve().parent.parent / "data" / "bot_state.pickle"
     state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -127,6 +147,7 @@ def main() -> None:
     app.add_handler(CallbackQueryHandler(handle_finish_button, pattern=f"^{FINISH_CALLBACK}$"))
     app.add_handler(build_form_conversation())
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.ALL & ~filters.TEXT & ~filters.COMMAND, handle_unsupported))
     log.info("Бот запущен, жду сообщения...")
     app.run_polling()
 
