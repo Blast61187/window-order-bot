@@ -57,11 +57,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if last_at and now - last_at > DIALOG_TIMEOUT:
         context.chat_data["history"] = []
         context.chat_data.pop("last_saved", None)
+        context.chat_data.pop("awaiting_contact_once", None)
     context.chat_data["last_message_at"] = now
 
     history = context.chat_data.setdefault("history", [])
     history.append(update.message.text)
     del history[:-MAX_HISTORY]
+
+    # если в прошлый раз заявка была полной, но без контактов — это последний шанс их дописать
+    contact_grace_used = context.chat_data.pop("awaiting_contact_once", False)
 
     try:
         data = extract("\n---\n".join(history))
@@ -73,6 +77,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     reply_markup = None
+    extra_note = None
     if not data.get("is_order"):
         context.chat_data["history"] = []
         context.chat_data.pop("last_saved", None)
@@ -87,13 +92,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             if context.chat_data.get("last_saved") != snapshot:
                 save_order(update.effective_chat.id, update.effective_user.username, "\n---\n".join(history), data)
                 context.chat_data["last_saved"] = snapshot
+
+            customer = data.get("customer") or {}
+            has_contact = any(customer.get(f) for f in ("name", "phone", "email"))
+            if has_contact or contact_grace_used:
+                # контакты уже есть — или это уже был второй шанс их дописать: диалог закрываем,
+                # чтобы следующее сообщение не подмешивалось к этой уже готовой заявке
+                context.chat_data["history"] = []
+                context.chat_data.pop("last_saved", None)
+                extra_note = "✅ Ваше обращение сохранено, мы свяжемся с вами в ближайшее время."
+            else:
+                context.chat_data["awaiting_contact_once"] = True
+                extra_note = (
+                    "✅ Ваше обращение сохранено. Если хотите, чтобы мы могли с вами связаться — "
+                    "укажите, пожалуйста, телефон или email следующим сообщением."
+                )
         else:
             # диалог ещё открыт (бот ждёт уточнения) — даём покупателю возможность его завершить
             context.chat_data["pending_data"] = data
             context.chat_data["pending_raw"] = "\n---\n".join(history)
             reply_markup = FINISH_KEYBOARD
 
-    await update.message.reply_text(format_response(data), reply_markup=reply_markup)
+    reply_text = format_response(data)
+    if extra_note:
+        reply_text = f"{reply_text}\n\n{extra_note}"
+    await update.message.reply_text(reply_text, reply_markup=reply_markup)
 
 
 async def handle_finish_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

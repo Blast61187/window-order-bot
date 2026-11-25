@@ -21,10 +21,12 @@
 Альтернативный способ — команда `/form`: пошаговая форма кнопками (тип/единицы/размеры/
 количество/контакты) без свободного текста вообще; на выходе — та же структура данных.
 
-Готовые заявки пишутся в `data/orders.jsonl` (по одной на строку, JSON) — для просмотра
-менеджером. Незавершённые диалоги (chat_data/user_data, включая шаги формы) переживают
-перезапуск бота через `PicklePersistence` (`data/bot_state.pickle`). Папка `data/` — в
-`.gitignore`, в ней телефоны/имена покупателей.
+Готовые заявки пишутся в SQLite (`data/orders.db`, две таблицы — `orders` и `order_items`,
+1 заказ → N изделий) через встроенный `sqlite3`, без отдельного сервера БД. Посмотреть их можно
+`python view_orders.py` (без установки SQLite-клиента) либо `sqlite3 data/orders.db`. Незавершённые
+диалоги (chat_data/user_data, включая шаги формы) переживают перезапуск бота через
+`PicklePersistence` (`data/bot_state.pickle`). Папка `data/` — в `.gitignore`, в ней телефоны/имена
+покупателей.
 
 Голосовые, фото, стикеры и прочие не-текстовые сообщения бот пока не разбирает — отвечает,
 что понимает только текст, и предлагает `/form`. При старте бот сам дёргает модель тестовым
@@ -63,7 +65,13 @@ Telegram-бот (нужен `TELEGRAM_BOT_TOKEN` от @BotFather):
 cd src && python bot.py
 ```
 
-Тесты (чистые функции `parser.py` — маска телефона, сборка ответа; без сети и без API-ключа):
+Просмотр сохранённых заявок:
+
+```bash
+cd src && python view_orders.py        # последние 20, можно python view_orders.py 100
+```
+
+Тесты (чистые функции `parser.py` + `storage.py` на временной БД; без сети и без API-ключа):
 
 ```bash
 pip install -r requirements-dev.txt
@@ -74,12 +82,14 @@ pytest tests/
 
 ```
 src/
-  schema.py   — JSON-схема для LLM (контракт "ничего не выдумывать")
-  parser.py   — вызов модели, маска телефона, сборка текста ответа
-  storage.py  — запись готовых заявок в data/orders.jsonl
-  wizard.py   — пошаговая форма по кнопкам (/form), альтернатива свободному тексту
-  bot.py      — Telegram-бот (python-telegram-bot)
-  cli.py      — локальный прогон без Telegram
+  schema.py     — JSON-схема для LLM (контракт "ничего не выдумывать")
+  parser.py     — вызов модели, маска телефона, сборка текста ответа
+  storage.py    — SQLite-хранилище заявок (data/orders.db)
+  view_orders.py — просмотр сохранённых заявок из консоли
+  wizard.py     — пошаговая форма по кнопкам (/form), альтернатива свободному тексту
+  bot.py        — Telegram-бот (python-telegram-bot)
+  cli.py        — локальный прогон без Telegram
 tests/
-  test_parser.py — тесты normalize_phone() и format_response()
+  test_parser.py  — тесты normalize_phone() и format_response()
+  test_storage.py — тесты записи/чтения заявок (на временной БД)
 ```
