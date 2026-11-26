@@ -15,7 +15,7 @@ from telegram.ext import (
     filters,
 )
 
-from parser import MAX_DIMENSION_MM, MIN_DIMENSION_MM, format_response, normalize_phone
+from parser import MAX_DIMENSION_MM, MIN_DIMENSION_MM, format_response, is_valid_email, normalize_phone
 from storage import save_order
 
 TYPE, UNIT, WIDTH, HEIGHT, QUANTITY, NAME, PHONE, EMAIL, CONFIRM = range(9)
@@ -213,7 +213,7 @@ async def got_phone_operator(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if query.data == SKIP:
         context.user_data["form"]["phone"] = None
         await query.edit_message_text("Телефон: не указан")
-        return await _ask_email(query.message)
+        return await _ask_email(query.message, context.user_data["form"])
     if query.data == OTHER_PHONE:
         await query.edit_message_text("Введите номер телефона целиком:")
         context.user_data["form"]["phone_operator"] = None
@@ -234,12 +234,19 @@ async def got_phone_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return PHONE
     context.user_data["form"]["phone"] = normalize_phone(digits)
     await update.message.reply_text(f"Телефон: {context.user_data['form']['phone']}")
-    return await _ask_email(update.message)
+    return await _ask_email(update.message, context.user_data["form"])
 
 
-async def _ask_email(message) -> int:
-    buttons = [[InlineKeyboardButton("Пропустить", callback_data=SKIP)], _cancel_row()]
-    await message.reply_text("Email (или пропустите):", reply_markup=_kb(buttons))
+async def _ask_email(message, form: dict) -> int:
+    # если телефон не указан, email становится обязательным — иначе с покупателем не связаться
+    buttons = []
+    if form.get("phone"):
+        buttons.append([InlineKeyboardButton("Пропустить", callback_data=SKIP)])
+        prompt = "Email (или пропустите):"
+    else:
+        prompt = "Телефон не указан, поэтому email обязателен — иначе мы не сможем с вами связаться:"
+    buttons.append(_cancel_row())
+    await message.reply_text(prompt, reply_markup=_kb(buttons))
     return EMAIL
 
 
@@ -248,13 +255,18 @@ async def got_email_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await query.answer()
     if query.data == CANCEL:
         return await _cancel(update, context)
+    # кнопка "Пропустить" тут есть только если телефон уже указан (см. _ask_email)
     context.user_data["form"]["email"] = None
     await query.edit_message_text("Email: не указан")
     return await _ask_confirm(query.message, context)
 
 
 async def got_email_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    context.user_data["form"]["email"] = update.message.text.strip()
+    email = update.message.text.strip()
+    if not is_valid_email(email):
+        await update.message.reply_text("Это не похоже на email (нужен формат вида name@example.com).")
+        return await _ask_email(update.message, context.user_data["form"])
+    context.user_data["form"]["email"] = email
     return await _ask_confirm(update.message, context)
 
 

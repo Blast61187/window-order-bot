@@ -35,10 +35,18 @@ markdown-разметки или текста до/после JSON:
 не по теме) — верни is_order=false, items пустой массив, customer с null-полями, и коротко \
 объясни в not_order_reason, почему это не похоже на заявку.
 
-Если во входном тексте несколько сообщений, разделённых строкой "---", — это подряд идущие \
-сообщения одного и того же покупателя в одном диалоге. Более поздние сообщения обычно уточняют \
-или дополняют более раннее (например, отвечают на твой же уточняющий вопрос) — объединяй их в \
-одну заявку, а не считай отдельными новыми изделиями, если из текста явно не следует обратное.
+Иногда тебе дают не просто новое сообщение, а ТЕКУЩЕЕ СОСТОЯНИЕ заявки (JSON по этой же схеме, \
+уже извлечённое из предыдущих сообщений этого же покупателя) плюс новое сообщение. В этом случае \
+твоя задача — вернуть ОБНОВЛЁННОЕ состояние, а не разбирать новое сообщение с нуля:
+- если новое сообщение явно меняет или уточняет какое-то поле (например, даёт новый телефон \
+взамен уже известного, досообщает недостающий размер, поправляет имя) — замени именно это поле \
+новым значением;
+- поля, которые новое сообщение не затрагивает, оставляй как в текущем состоянии — не теряй уже \
+известные данные и не придумывай причин их менять;
+- если новое сообщение явно описывает ДОПОЛНИТЕЛЬНОЕ отдельное изделие (например, "и ещё дверь \
+700х2100") — добавь его отдельным элементом в items, не трогая и не дублируя уже имеющиеся;
+- если новое сообщение совсем не по теме заявки — верни is_order=false, как обычно (даже если \
+текущее состояние было про заявку).
 """
 
 _client = None
@@ -56,8 +64,21 @@ def _get_client():
     return _client
 
 
-def extract(text: str) -> dict:
-    """Вызывает модель и возвращает провалидированный dict по RESPONSE_SCHEMA."""
+def extract(text: str, previous_data: dict | None = None) -> dict:
+    """Вызывает модель и возвращает провалидированный dict по RESPONSE_SCHEMA.
+
+    Если передан previous_data (состояние заявки с прошлых сообщений этого диалога), модель
+    обновляет его новым сообщением, а не разбирает текст с нуля — так новое сообщение не может
+    случайно продублировать уже известное изделие или потерять уже известный контакт."""
+    user_content = text
+    if previous_data:
+        user_content = (
+            "Текущее состояние заявки (JSON):\n"
+            f"{json.dumps(previous_data, ensure_ascii=False)}\n\n"
+            "Новое сообщение от покупателя:\n"
+            f"{text}"
+        )
+
     client = _get_client()
     response = client.chat.completions.create(
         model=MODEL,
@@ -65,18 +86,65 @@ def extract(text: str) -> dict:
         response_format={"type": "json_object"},
         messages=[
             {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": text},
+            {"role": "user", "content": user_content},
         ],
     )
     content = response.choices[0].message.content.strip()
     content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.MULTILINE).strip()
     data = json.loads(content)
     _validate_dimensions(data)
+    _validate_email(data)
     return data
 
 
 MIN_DIMENSION_MM = 100
 MAX_DIMENSION_MM = 6000
+
+EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def is_valid_email(email: str | None) -> bool:
+    return bool(email) and bool(EMAIL_PATTERN.match(email.strip()))
+
+
+def has_enough_digits(phone: str | None, min_digits: int = 7) -> bool:
+    return bool(phone) and len(re.sub(r"\D", "", phone)) >= min_digits
+
+
+def is_valid_phone(phone: str | None) -> bool:
+    """Либо не похоже на белорусский формат (тогда доверяем просто количеству цифр — может,
+    это другая страна), либо похоже — и тогда код оператора обязан быть реальным."""
+    if not phone:
+        return False
+    code = _by_mobile_code(phone)
+    if code is not None:
+        return code in BY_MOBILE_CODES
+    return has_enough_digits(phone)
+
+
+def invalid_by_operator_code(phone: str | None) -> str | None:
+    """Если phone похож по форме на белорусский мобильный, но код оператора не существует —
+    возвращает этот код (чтобы явно предупредить), иначе None."""
+    if not phone:
+        return None
+    code = _by_mobile_code(phone)
+    if code is not None and code not in BY_MOBILE_CODES:
+        return code
+    return None
+
+
+def is_valid_contact(customer: dict) -> bool:
+    """Телефон или email, которые реально похожи на телефон/email, а не на любую непустую строку."""
+    return is_valid_phone(customer.get("phone")) or is_valid_email(customer.get("email"))
+
+
+def _validate_email(data: dict) -> None:
+    """Если то, что модель вернула как email, не похоже на email (нет @ и домена) — считаем,
+    что email не указан, а не что это и есть email."""
+    customer = data.get("customer") or {}
+    email = customer.get("email")
+    if email and not is_valid_email(email):
+        customer["email"] = None
 
 
 def _validate_dimensions(data: dict) -> None:
@@ -108,31 +176,39 @@ _PRODUCT_LABELS = {
 }
 
 
-def normalize_phone(raw: str) -> str:
-    """Приводит белорусский номер к виду +375 (29) 000-00-21.
-    Для номеров, не похожих на белорусские, возвращает исходную строку с '+' при его наличии."""
-    digits = re.sub(r"\D", "", raw)
+BY_MOBILE_CODES = {"25", "29", "33", "44"}  # реальные коды мобильных операторов РБ
 
+
+def _by_mobile_code(raw: str) -> str | None:
+    """Если raw похож по форме на белорусский мобильный (375/80 + 9 цифр, либо голые 9 цифр) —
+    возвращает двузначный код оператора (даже если он несуществующий), иначе None."""
+    digits = re.sub(r"\D", "", raw)
     is_by_prefixed = len(digits) >= 9 and (digits.startswith("375") or digits.startswith("80"))
     is_bare_national = len(digits) == 9  # уже "код оператора (2) + номер абонента (7)", без 375/80
-    if is_by_prefixed or is_bare_national:
+    if (is_by_prefixed or is_bare_national) and len(digits[-9:]) == 9:
+        return digits[-9:][:2]
+    return None
+
+
+def normalize_phone(raw: str) -> str:
+    """Приводит белорусский мобильный номер к виду +375 (29) 000-00-21.
+    Если похоже на белорусский номер, но код оператора не существует (например, 28), или номер
+    не похож на белорусский мобильный вообще — возвращает исходную строку с '+' при его наличии,
+    а не навязывает заведомо неверную маску."""
+    digits = re.sub(r"\D", "", raw)
+    code = _by_mobile_code(raw)
+    if code in BY_MOBILE_CODES:
         national = digits[-9:]
-        if len(national) == 9:
-            code, subscriber = national[:2], national[2:]
-            return f"+375 ({code}) {subscriber[:3]}-{subscriber[3:5]}-{subscriber[5:7]}"
+        subscriber = national[2:]
+        return f"+375 ({code}) {subscriber[:3]}-{subscriber[3:5]}-{subscriber[5:7]}"
 
     return raw if raw.strip().startswith("+") else f"+{digits}" if digits else raw
 
 
 def format_response(data: dict) -> str:
     if not data.get("is_order"):
-        reason = data.get("not_order_reason") or "в сообщении нет признаков заявки на изделие."
-        return (
-            "Это не похоже на заявку на окна/двери/стеклопакеты.\n"
-            f"{reason}\n\n"
-            "Если хотите оформить заказ, укажите, пожалуйста: тип изделия, размеры (ширина×высота) "
-            "и количество."
-        )
+        # not_order_reason — внутренняя классификация модели, клиенту её не показываем
+        return "Это не похоже на заявку на окна/двери/стеклопакеты."
 
     items = data.get("items") or []
     customer = data.get("customer") or {}

@@ -1,6 +1,41 @@
 """Тесты чистых функций parser.py (без сети и без API-ключа — extract() не вызывается)."""
 
-from parser import format_response, normalize_phone
+from parser import format_response, has_enough_digits, is_valid_contact, is_valid_email, is_valid_phone, normalize_phone
+
+
+def test_is_valid_email_accepts_normal_address():
+    assert is_valid_email("user@example.com")
+
+
+def test_is_valid_email_rejects_garbage():
+    assert not is_valid_email("привет")
+    assert not is_valid_email("user@")
+    assert not is_valid_email("")
+    assert not is_valid_email(None)
+
+
+def test_has_enough_digits():
+    assert has_enough_digits("+375 29 000-00-21")
+    assert not has_enough_digits("123")
+    assert not has_enough_digits(None)
+
+
+def test_is_valid_phone_rejects_by_shaped_number_with_fake_operator_code():
+    # похоже на белорусский номер (375 + 9 цифр), но код "24" не существует
+    assert not is_valid_phone("+375245455669")
+
+
+def test_is_valid_phone_accepts_foreign_number_by_digit_count():
+    assert is_valid_phone("+1 202 555 0176")
+
+
+def test_is_valid_contact_phone_or_email():
+    assert is_valid_contact({"phone": "+375 29 000-00-21", "email": None})
+    assert is_valid_contact({"phone": None, "email": "user@example.com"})
+    assert not is_valid_contact({"phone": None, "email": "мусор"})
+    assert not is_valid_contact({"phone": "12", "email": None})
+    assert not is_valid_contact({"phone": "+375245455669", "email": None})
+    assert not is_valid_contact({})
 
 
 def test_normalize_phone_with_plus_375():
@@ -17,6 +52,12 @@ def test_normalize_phone_bare_national_number():
 
 def test_normalize_phone_foreign_number_untouched():
     assert normalize_phone("+1 202 555 0176") == "+1 202 555 0176"
+
+
+def test_normalize_phone_rejects_nonexistent_operator_code():
+    # "28" — не существующий код мобильного оператора РБ, маску навязывать нельзя
+    assert normalize_phone("+375 28 254-56-54") == "+375 28 254-56-54"
+    assert normalize_phone("282545654") == "+282545654"
 
 
 def test_normalize_phone_empty_string():
@@ -123,4 +164,4 @@ def test_format_response_not_an_order():
     }
     result = format_response(data)
     assert "не похоже на заявку" in result
-    assert "Это вопрос о цене" in result
+    assert "Это вопрос о цене" not in result  # техническую причину модели клиенту не показываем

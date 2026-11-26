@@ -3,3 +3,5 @@ __pycache__/
 *.pyc
 .env
 data/
+window-order-bot.desktop
+launch_desktop.sh
