@@ -5,3 +5,4 @@ __pycache__/
 data/
 window-order-bot.desktop
 launch_desktop.sh
+.idea/
